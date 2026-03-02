@@ -1,0 +1,63 @@
+name: Build QEMU VirGL (Docker)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Persist Docker layer cache between runs to avoid rebuilding unchanged layers.
+      # The cache key is scoped to the branch; PRs fall back to the base-branch cache.
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: qemu-virgl-win-cross:latest
+          # GitHub-hosted ubuntu-latest runners have 2 vCPUs; 4 jobs is safe.
+          build-args: |
+            BUILD_JOBS=4
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      # Prevent the cache directory from growing unboundedly between runs.
+      - name: Rotate layer cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Extract build artifacts
+        run: |
+          mkdir -p ./output
+          docker run --rm \
+            -v "${{ github.workspace }}/output:/mnt/output" \
+            qemu-virgl-win-cross
+
+      # ANGLE runtime DLLs (libEGL.dll, libGLESv2.dll, d3dcompiler_47.dll) are NOT
+      # included — they must be obtained from a browser install and added manually.
+      - name: Upload Windows binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-virgl-windows-${{ github.sha }}
+          path: output/
+          retention-days: 14

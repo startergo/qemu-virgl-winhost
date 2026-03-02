@@ -33,7 +33,9 @@ RUN dnf update -y && \
                 ccache \
                 diffutils \
                 patch \
-                python3-pip
+                python3-pip \
+                rust \
+                cargo
 
 # Upgrade meson via pip to ensure >= 1.6.0 (required by QEMU HEAD for build.rust_std).
 # The dnf package on Fedora may lag behind; pip ensures we get the latest.

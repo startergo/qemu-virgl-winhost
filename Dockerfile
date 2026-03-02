@@ -108,7 +108,11 @@ RUN git clone https://gitlab.freedesktop.org/spice/spice.git && \
     mingw64-meson build/ \
         -Dgstreamer=no \
         -Dopus=disabled \
-        -Dlz4=false && \
+        -Dlz4=false \
+        -Dsasl=false \
+        -Dmanual=false \
+        -Dtests=false && \
+        -Dsasl=disabled && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install
 

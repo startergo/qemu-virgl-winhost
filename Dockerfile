@@ -37,6 +37,7 @@ RUN --mount=type=cache,target=/var/cache/dnf \
                 diffutils \
                 patch \
                 python3-pip \
+                python3-pyparsing \
                 rust \
                 cargo \
                 mingw64-SDL2_image \

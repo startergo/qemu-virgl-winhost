@@ -4,8 +4,9 @@ FROM fedora:latest
 ARG OUTPUT_DIR=/output
 ENV OUTPUT_DIR=${OUTPUT_DIR}
 
-# Set optimal number of build jobs based on available cores
-ENV BUILD_JOBS=4
+# Set optimal number of build jobs based on available cores (override with --build-arg BUILD_JOBS=N)
+ARG BUILD_JOBS=4
+ENV BUILD_JOBS=${BUILD_JOBS}
 
 RUN dnf update -y && \
     dnf install -y mingw64-gcc \
@@ -30,7 +31,8 @@ RUN dnf update -y && \
                 mingw64-cmake \
                 cmake \
                 ccache \
-                diffutils
+                diffutils \
+                patch
 
 # Set up ccache
 ENV PATH="/usr/lib/ccache:${PATH}"
@@ -40,6 +42,7 @@ COPY angle/include/ /usr/x86_64-w64-mingw32/sys-root/mingw/include/
 COPY angle/egl.pc /usr/x86_64-w64-mingw32/sys-root/mingw/lib/pkgconfig/
 COPY angle/glesv2.pc /usr/x86_64-w64-mingw32/sys-root/mingw/lib/pkgconfig/
 COPY WinHv*.h /usr/x86_64-w64-mingw32/sys-root/mingw/include/
+COPY patches/ /patches/
 
 RUN git clone https://github.com/anholt/libepoxy.git && \
     cd libepoxy && \
@@ -47,10 +50,10 @@ RUN git clone https://github.com/anholt/libepoxy.git && \
     ninja -C builddir -j4 && \
     ninja -C builddir install
 
-# Updated virglrenderer build using direct download of release tarball
+# Build virglrenderer from the main development branch
 RUN mkdir -p /virglrenderer && \
     cd /virglrenderer && \
-    curl -L https://gitlab.freedesktop.org/virgl/virglrenderer/-/archive/1.1.1/virglrenderer-1.1.1.tar.gz -o virglrenderer.tar.gz && \
+    curl -L https://gitlab.freedesktop.org/virgl/virglrenderer/-/archive/main/virglrenderer-main.tar.gz -o virglrenderer.tar.gz && \
     tar -xzf virglrenderer.tar.gz --strip-components=1 && \
     mingw64-meson build/ -Dplatforms=egl -Dminigbm_allocation=false && \
     ninja -C build -j${BUILD_JOBS} && \
@@ -60,6 +63,7 @@ RUN git clone https://github.com/qemu/qemu.git && \
     cd qemu && \
     sed -i 's/SDL_SetHint(SDL_HINT_ANGLE_BACKEND, "d3d11");/#ifdef SDL_HINT_ANGLE_BACKEND\n            SDL_SetHint(SDL_HINT_ANGLE_BACKEND, "d3d11");\n#endif/' ui/sdl2.c && \
     sed -i 's/SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");/#ifdef SDL_HINT_ANGLE_FAST_PATH\n            SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");\n#endif/' ui/sdl2.c && \
+    patch -p1 < /patches/qemu-10.1.2-sdl-clipboard.patch && \
     export NOCONFIGURE=1 && \
     ./configure --target-list=x86_64-softmmu \
     --prefix="${OUTPUT_DIR}" \    

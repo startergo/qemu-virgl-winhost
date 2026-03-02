@@ -89,8 +89,8 @@ RUN git clone https://github.com/qemu/qemu.git && \
     sed -i 's/SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");/#ifdef SDL_HINT_ANGLE_FAST_PATH\n            SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");\n#endif/' ui/sdl2.c && \
     patch -p1 < /patches/qemu-10.1.2-sdl-clipboard.patch && \
     export NOCONFIGURE=1 && \
+    export MESON=/usr/local/bin/meson && \
     ./configure --target-list=x86_64-softmmu \
-    --meson=$(which meson) \
     --prefix="${OUTPUT_DIR}" \
     --cross-prefix=x86_64-w64-mingw32- \
     --enable-whpx \

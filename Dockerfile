@@ -112,7 +112,6 @@ RUN git clone https://gitlab.freedesktop.org/spice/spice.git && \
         -Dsasl=false \
         -Dmanual=false \
         -Dtests=false && \
-        -Dsasl=disabled && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install
 

@@ -100,6 +100,7 @@ RUN git clone https://github.com/qemu/qemu.git && \
     --enable-debug \
     --disable-stack-protector \
     --disable-werror \
+    --disable-rust \
     --enable-sdl && \
     make -j${BUILD_JOBS} && make install
 

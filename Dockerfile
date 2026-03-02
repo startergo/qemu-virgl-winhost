@@ -42,7 +42,6 @@ RUN --mount=type=cache,target=/var/cache/dnf \
                 mingw64-openssl \
                 mingw64-opus \
                 mingw64-libjpeg-turbo \
-                mingw64-lz4 \
                 mingw64-zlib \
                 mingw64-spice-protocol \
                 curl
@@ -101,7 +100,7 @@ RUN git clone https://gitlab.freedesktop.org/spice/spice.git && \
         -Dclient=disabled \
         -Dgstreamer=no \
         -Dopus=enabled \
-        -Dlz4=enabled && \
+        -Dlz4=disabled && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install
 

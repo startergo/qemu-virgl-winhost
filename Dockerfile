@@ -32,7 +32,12 @@ RUN dnf update -y && \
                 cmake \
                 ccache \
                 diffutils \
-                patch
+                patch \
+                python3-pip
+
+# Upgrade meson via pip to ensure >= 1.6.0 (required by QEMU HEAD for build.rust_std).
+# The dnf package on Fedora may lag behind; pip ensures we get the latest.
+RUN pip3 install --upgrade meson
 
 # Set up ccache
 ENV PATH="/usr/lib/ccache:${PATH}"
@@ -85,8 +90,9 @@ RUN git clone https://github.com/qemu/qemu.git && \
     patch -p1 < /patches/qemu-10.1.2-sdl-clipboard.patch && \
     export NOCONFIGURE=1 && \
     ./configure --target-list=x86_64-softmmu \
-    --prefix="${OUTPUT_DIR}" \    
-    --cross-prefix=x86_64-w64-mingw32- \    
+    --meson=$(which meson) \
+    --prefix="${OUTPUT_DIR}" \
+    --cross-prefix=x86_64-w64-mingw32- \
     --enable-whpx \
     --enable-virglrenderer \
     --enable-opengl \

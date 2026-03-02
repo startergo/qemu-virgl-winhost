@@ -50,6 +50,25 @@ RUN git clone https://github.com/anholt/libepoxy.git && \
     ninja -C builddir -j4 && \
     ninja -C builddir install
 
+# Stub sys/ioccom.h: virglrenderer's bundled drm-uapi/drm.h includes this
+# BSD-only header unconditionally; it does not exist in the mingw sys-root.
+# The stub provides the ioctl-encoding macros so the header compiles.
+# The actual DRM ioctls are never called in the EGL/Windows build path.
+RUN mkdir -p /usr/x86_64-w64-mingw32/sys-root/mingw/include/sys && \
+    printf '%s\n' \
+      '#pragma once' \
+      '/* Stub sys/ioccom.h for cross-compilation to Windows */' \
+      '#define IOC_VOID   0x20000000UL' \
+      '#define IOC_OUT    0x40000000UL' \
+      '#define IOC_IN     0x80000000UL' \
+      '#define IOC_INOUT  (IOC_IN|IOC_OUT)' \
+      '#define _IOC(d,g,n,l) ((d)|(((unsigned long)(l)&0x1fffUL)<<16UL)|((unsigned long)(g)<<8UL)|(unsigned long)(n))' \
+      '#define _IO(g,n)     _IOC(IOC_VOID,(g),(n),0)' \
+      '#define _IOR(g,n,t)  _IOC(IOC_OUT,(g),(n),sizeof(t))' \
+      '#define _IOW(g,n,t)  _IOC(IOC_IN,(g),(n),sizeof(t))' \
+      '#define _IOWR(g,n,t) _IOC(IOC_INOUT,(g),(n),sizeof(t))' \
+    > /usr/x86_64-w64-mingw32/sys-root/mingw/include/sys/ioccom.h
+
 # Build virglrenderer from the main development branch
 RUN mkdir -p /virglrenderer && \
     cd /virglrenderer && \

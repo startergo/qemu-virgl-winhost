@@ -98,9 +98,9 @@ RUN git clone https://gitlab.freedesktop.org/slirp/libslirp.git && \
 RUN git clone https://gitlab.freedesktop.org/spice/spice.git && \
     cd spice && \
     mingw64-meson build/ \
-        -Dgstreamer=disabled \
-        -Dopus=enabled \
-        -Dlz4=disabled && \
+        -Dgstreamer=no \
+        -Dopus=no \
+        -Dlz4=no && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install
 

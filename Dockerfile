@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM fedora:latest
 
 # Define build arguments and environment variables
@@ -8,7 +9,8 @@ ENV OUTPUT_DIR=${OUTPUT_DIR}
 ARG BUILD_JOBS=4
 ENV BUILD_JOBS=${BUILD_JOBS}
 
-RUN dnf update -y && \
+RUN --mount=type=cache,target=/var/cache/dnf \
+    dnf update -y && \
     dnf install -y mingw64-gcc \
                 mingw64-glib2 \
                 mingw64-pixman \
@@ -39,7 +41,8 @@ RUN dnf update -y && \
 
 # Upgrade meson via pip to ensure >= 1.6.0 (required by QEMU HEAD for build.rust_std).
 # The dnf package on Fedora may lag behind; pip ensures we get the latest.
-RUN pip3 install --upgrade meson
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install --upgrade meson
 
 # Set up ccache
 ENV PATH="/usr/lib/ccache:${PATH}"
@@ -85,7 +88,8 @@ RUN mkdir -p /virglrenderer && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install
 
-RUN git clone https://github.com/qemu/qemu.git && \
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    git clone https://github.com/qemu/qemu.git && \
     cd qemu && \
     sed -i 's/SDL_SetHint(SDL_HINT_ANGLE_BACKEND, "d3d11");/#ifdef SDL_HINT_ANGLE_BACKEND\n            SDL_SetHint(SDL_HINT_ANGLE_BACKEND, "d3d11");\n#endif/' ui/sdl2.c && \
     sed -i 's/SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");/#ifdef SDL_HINT_ANGLE_FAST_PATH\n            SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");\n#endif/' ui/sdl2.c && \

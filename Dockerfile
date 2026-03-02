@@ -37,7 +37,11 @@ RUN --mount=type=cache,target=/var/cache/dnf \
                 patch \
                 python3-pip \
                 rust \
-                cargo
+                cargo \
+                mingw64-SDL2_image \
+                mingw64-libslirp \
+                mingw64-spice-protocol \
+                mingw64-spice
 
 # Upgrade meson via pip to ensure >= 1.6.0 (required by QEMU HEAD for build.rust_std).
 # The dnf package on Fedora may lag behind; pip ensures we get the latest.
@@ -107,7 +111,10 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --disable-stack-protector \
     --disable-werror \
     --disable-rust \
-    --enable-sdl && \
+    --enable-sdl \
+    --enable-sdl-image \
+    --enable-slirp \
+    --enable-spice && \
     make -j${BUILD_JOBS} && make install
 
 # Add a step to copy the built binaries to the output directory

@@ -120,7 +120,7 @@ RUN mkdir -p /virglrenderer && \
     cd /virglrenderer && \
     curl -L https://gitlab.freedesktop.org/virgl/virglrenderer/-/archive/main/virglrenderer-main.tar.gz -o virglrenderer.tar.gz && \
     tar -xzf virglrenderer.tar.gz --strip-components=1 && \
-    patch -p1 < /patches/0001-Virglrenderer-on-Windows-and-macOS.patch && \
+    patch -p2 < /patches/0001-Virglrenderer-on-Windows-and-macOS.patch && \
     mingw64-meson build/ -Dplatforms=egl -Dminigbm_allocation=false && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install
@@ -130,8 +130,8 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     cd qemu && \
     sed -i 's/SDL_SetHint(SDL_HINT_ANGLE_BACKEND, "d3d11");/#ifdef SDL_HINT_ANGLE_BACKEND\n            SDL_SetHint(SDL_HINT_ANGLE_BACKEND, "d3d11");\n#endif/' ui/sdl2.c && \
     sed -i 's/SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");/#ifdef SDL_HINT_ANGLE_FAST_PATH\n            SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");\n#endif/' ui/sdl2.c && \
-    patch -p1 < /patches/0001-Virgil3D-with-SDL2-OpenGL.patch && \
-    patch -p1 < /patches/0002-Virgil3D-macOS-GLSL-version.patch && \
+    patch -p3 < /patches/0001-Virgil3D-with-SDL2-OpenGL.patch && \
+    patch -p3 < /patches/0002-Virgil3D-macOS-GLSL-version.patch && \
     patch -p1 < /patches/qemu-10.1.2-sdl-clipboard.patch && \
     export NOCONFIGURE=1 && \
     export MESON=/usr/local/bin/meson && \

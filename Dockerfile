@@ -39,9 +39,13 @@ RUN --mount=type=cache,target=/var/cache/dnf \
                 rust \
                 cargo \
                 mingw64-SDL2_image \
-                mingw64-libslirp \
+                mingw64-openssl \
+                mingw64-opus \
+                mingw64-libjpeg-turbo \
+                mingw64-lz4 \
+                mingw64-zlib \
                 mingw64-spice-protocol \
-                mingw64-spice
+                curl
 
 # Upgrade meson via pip to ensure >= 1.6.0 (required by QEMU HEAD for build.rust_std).
 # The dnf package on Fedora may lag behind; pip ensures we get the latest.
@@ -82,6 +86,24 @@ RUN mkdir -p /usr/x86_64-w64-mingw32/sys-root/mingw/include/sys && \
       '#define _IOW(g,n,t)  _IOC(IOC_IN,(g),(n),sizeof(t))' \
       '#define _IOWR(g,n,t) _IOC(IOC_INOUT,(g),(n),sizeof(t))' \
     > /usr/x86_64-w64-mingw32/sys-root/mingw/include/sys/ioccom.h
+
+# Build libslirp from source (no mingw64-libslirp package exists in Fedora repos)
+RUN git clone https://gitlab.freedesktop.org/slirp/libslirp.git && \
+    cd libslirp && \
+    mingw64-meson build/ && \
+    ninja -C build -j${BUILD_JOBS} && \
+    ninja -C build install
+
+# Build libspice-server (SPICE server required for guest clipboard agent channel)
+RUN git clone https://gitlab.freedesktop.org/spice/spice.git && \
+    cd spice && \
+    mingw64-meson build/ \
+        -Dclient=disabled \
+        -Dgstreamer=no \
+        -Dopus=enabled \
+        -Dlz4=enabled && \
+    ninja -C build -j${BUILD_JOBS} && \
+    ninja -C build install
 
 # Build virglrenderer from the main development branch
 RUN mkdir -p /virglrenderer && \

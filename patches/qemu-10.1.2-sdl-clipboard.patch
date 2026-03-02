@@ -94,10 +94,10 @@
          if (gui_grab && !gui_fullscreen) {
              sdl_grab_end(scon);
          }
-         break;
 +#ifdef CONFIG_SDL_CLIPBOARD
 +        sdl2_clipboard_handle_focus_change(scon, false);
 +#endif
+         break;
      case SDL_WINDOWEVENT_RESTORED:
          update_displaychangelistener(&scon->dcl, GUI_REFRESH_INTERVAL_DEFAULT);
          break;
@@ -126,7 +126,7 @@
  #if defined(SDL_VIDEO_DRIVER_WINDOWS)
 --- qemu-10.1.2/ui/sdl2-clipboard.c	1969-12-31 19:00:00
 +++ qemu-10.1.2-patched/ui/sdl2-clipboard.c	2025-11-26 09:07:45
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,216 @@
 +/*
 + * SDL UI -- clipboard support (improved async version)
 + *
@@ -237,9 +237,19 @@
 +            /* Ensure null termination for SDL clipboard */
 +            g_autofree char *text = g_strndup(text_data, text_size);
 +            if (text && text[0] != '\0') {
-+                if (SDL_SetClipboardText(text) < 0) {
-+                    warn_report("SDL clipboard: Failed to set clipboard "
-+                                "text: %s", SDL_GetError());
++                /*
++                 * Only call SDL_SetClipboardText if the content has actually
++                 * changed. Without this check a ping-pong loop forms:
++                 *   SDL_SetClipboardText → SDL_CLIPBOARDUPDATE →
++                 *   sdl2_clipboard_handle_request → qemu_clipboard_update →
++                 *   guest echoes the same data back → sdl2_clipboard_notify →
++                 *   SDL_SetClipboardText → … (repeats indefinitely)
++                 * Comparing first breaks the loop on the second iteration.
++                 */
++                g_autofree char *current = SDL_HasClipboardText()
++                    ? SDL_GetClipboardText() : NULL;
++                if (!current || strcmp(current, text) != 0) {
++                    SDL_SetClipboardText(text);
 +                }
 +            }
 +            break;

@@ -12,6 +12,7 @@ ENV BUILD_JOBS=${BUILD_JOBS}
 RUN --mount=type=cache,target=/var/cache/dnf \
     dnf update -y && \
     dnf install -y mingw64-gcc \
+                mingw64-gcc-c++ \
                 mingw64-glib2 \
                 mingw64-pixman \
                 mingw64-gtk3 \

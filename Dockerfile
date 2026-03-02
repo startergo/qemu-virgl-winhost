@@ -43,6 +43,7 @@ RUN --mount=type=cache,target=/var/cache/dnf \
                 mingw64-opus \
                 mingw64-libjpeg-turbo \
                 mingw64-zlib \
+                mingw64-xz \
                 mingw64-spice-protocol \
                 curl
 

@@ -45,7 +45,6 @@ RUN --mount=type=cache,target=/var/cache/dnf \
                 mingw64-libjpeg-turbo \
                 mingw64-zlib \
                 mingw64-xz \
-                mingw64-spice-protocol \
                 curl
 
 # Upgrade meson via pip to ensure >= 1.6.0 (required by QEMU HEAD for build.rust_std).
@@ -91,6 +90,13 @@ RUN mkdir -p /usr/x86_64-w64-mingw32/sys-root/mingw/include/sys && \
 # Build libslirp from source (no mingw64-libslirp package exists in Fedora repos)
 RUN git clone https://gitlab.freedesktop.org/slirp/libslirp.git && \
     cd libslirp && \
+    mingw64-meson build/ && \
+    ninja -C build -j${BUILD_JOBS} && \
+    ninja -C build install
+
+# Build spice-protocol from source (Fedora mingw64-spice-protocol is 0.14.4; spice-server needs >= 0.14.5)
+RUN git clone https://gitlab.freedesktop.org/spice/spice-protocol.git && \
+    cd spice-protocol && \
     mingw64-meson build/ && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install

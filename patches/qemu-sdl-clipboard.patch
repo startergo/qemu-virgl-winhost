@@ -125,7 +125,7 @@
  #if defined(SDL_VIDEO_DRIVER_WINDOWS)
 --- qemu-10.1.2/ui/sdl2-clipboard.c	1969-12-31 19:00:00
 +++ qemu-10.1.2-patched/ui/sdl2-clipboard.c	2025-11-26 09:07:45
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,238 @@
 +/*
 + * SDL UI -- clipboard support (improved async version)
 + *
@@ -181,11 +181,6 @@
 +        container_of(notifier, struct sdl2_console, cbpeer.notifier);
 +    const char *text_data;
 +    size_t text_size;
-+
-+    /* Skip processing if clipboard is not active (e.g., during screen lock) */
-+    if (!scon->clipboard_active) {
-+        return;
-+    }
 +
 +    switch (notify->type) {
 +    case QEMU_CLIPBOARD_UPDATE_INFO:

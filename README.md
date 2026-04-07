@@ -94,6 +94,7 @@ cd output
 .\run-qemu.bat -M q35 -m 8G -accel whpx -hda vm.qcow2 ^
   -device virtio-vga-gl -display sdl,gl=on ^
   -smp cores=4 -usb -device usb-tablet -k en-us ^
+   -audiodev dsound,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 ^
   -device virtio-serial ^
   -chardev qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off ^
   -device virtserialport,chardev=vdagent,name=com.redhat.spice.0

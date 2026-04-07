@@ -10,7 +10,7 @@
  #include "ui/kbd-state.h"
  #ifdef CONFIG_OPENGL
  # include "ui/egl-helpers.h"
-@@ -45,6 +48,11 @@
+@@ -45,5 +48,10 @@
      bool gui_keysym;
      SDL_GLContext winctx;
      QKbdState *kbd;
@@ -19,9 +19,8 @@
 +    bool clipboard_active;
 +    uint32_t last_focus_time;
 +#endif
+     bool has_dmabuf;
  #ifdef CONFIG_OPENGL
-     QemuGLShader *gls;
-     egl_fb guest_fb;
 @@ -97,4 +105,11 @@
  void sdl2_gl_scanout_flush(DisplayChangeListener *dcl,
                             uint32_t x, uint32_t y, uint32_t w, uint32_t h);
@@ -126,7 +125,7 @@
  #if defined(SDL_VIDEO_DRIVER_WINDOWS)
 --- qemu-10.1.2/ui/sdl2-clipboard.c	1969-12-31 19:00:00
 +++ qemu-10.1.2-patched/ui/sdl2-clipboard.c	2025-11-26 09:07:45
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,243 @@
 +/*
 + * SDL UI -- clipboard support (improved async version)
 + *
@@ -151,6 +150,7 @@
 +} SDLClipboardRequest;
 +
 +static SDLClipboardRequest *pending_request;
++static char *last_clipboard_text;
 +
 +static void sdl2_clipboard_clear_pending(void)
 +{
@@ -166,6 +166,7 @@
 +{
 +    /* Clear any pending requests when clipboard state is reset */
 +    sdl2_clipboard_clear_pending();
++    g_clear_pointer(&last_clipboard_text, g_free);
 +
 +    /* Force a fresh clipboard check after reconnection */
 +    if (scon->clipboard_active) {
@@ -178,7 +179,6 @@
 +    QemuClipboardNotify *notify = data;
 +    struct sdl2_console *scon =
 +        container_of(notifier, struct sdl2_console, cbpeer.notifier);
-+    bool self_update = notify->info->owner == &scon->cbpeer;
 +    const char *text_data;
 +    size_t text_size;
 +
@@ -190,6 +190,13 @@
 +    switch (notify->type) {
 +    case QEMU_CLIPBOARD_UPDATE_INFO:
 +        {
++            /*
++             * self_update check must be inside UPDATE_INFO — for
++             * RESET_SERIAL, notify->info may be NULL and dereferencing
++             * it before the switch would crash.
++             */
++            bool self_update = notify->info->owner == &scon->cbpeer;
++
 +            /* Skip self-updates to avoid clipboard manager conflicts */
 +            if (self_update) {
 +                return;
@@ -335,10 +342,29 @@
 +        return; /* Ignore empty clipboard */
 +    }
 +
++    /*
++     * Skip duplicate updates. KDE's Klipper fires many rapid
++     * SDL_CLIPBOARDUPDATE events at login; without this guard every event
++     * floods qemu-vdagent and can trigger a use-after-free crash.
++     */
++    if (last_clipboard_text && strcmp(last_clipboard_text, text) == 0) {
++        SDL_free(text);
++        return;
++    }
++    g_free(last_clipboard_text);
++    last_clipboard_text = g_strdup(text);
++
 +    info = qemu_clipboard_info_new(&scon->cbpeer,
 +                                   QEMU_CLIPBOARD_SELECTION_CLIPBOARD);
++    /*
++     * Pass update=false here because we call qemu_clipboard_update()
++     * explicitly below. Passing true would trigger a double-notification
++     * (set_data calls update internally, then we call it again), which
++     * causes vdagent to process the same clipboard info twice and can
++     * lead to a use-after-free when the info is released.
++     */
 +    qemu_clipboard_set_data(&scon->cbpeer, info, QEMU_CLIPBOARD_TYPE_TEXT,
-+                            strlen(text), text, true);
++                            strlen(text), text, false);
 +    qemu_clipboard_update(info);
 +    qemu_clipboard_info_unref(info);
 +    SDL_free(text);

@@ -85,6 +85,35 @@ Linux guests have excellent 3D acceleration support with VirGL, often better tha
    ./output/qemu-system-x86_64w.exe -M q35 -m 4G -hda linux.qcow2 -device virtio-vga-gl -display sdl,gl=on -smp cores=4
    ```
 
+### Using run-qemu.bat
+
+The `output\run-qemu.bat` launcher script sets the correct `-L share` path and calls `bin\qemu-system-x86_64w.exe`. Run it from the `output\` directory and pass QEMU arguments directly:
+
+```bat
+cd output
+.\run-qemu.bat -M q35 -m 8G -accel whpx -hda vm.qcow2 ^
+  -device virtio-vga-gl -display sdl,gl=on ^
+  -smp cores=4 -usb -device usb-tablet -k en-us ^
+  -device virtio-serial ^
+  -chardev qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off ^
+  -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
+```
+
+This enables:
+- **WHPX** hardware acceleration (requires Hyper-V/HypervisorPlatform enabled in Windows Features)
+- **VirGL** 3D acceleration via SDL+OpenGL
+- **Clipboard sync** between Windows host and Linux guest via `qemu-vdagent`
+
+For clipboard sync to work in the guest, install and start `spice-vdagent`:
+```bash
+# Arch/EndeavourOS
+sudo pacman -S spice-vdagent
+systemctl --user enable --now spice-vdagentd
+
+# Ubuntu/Debian
+sudo apt install spice-vdagent
+```
+
 For optimal Linux guest experience:
 - Use Ubuntu 20.04 or newer, Fedora 34+, or any recent distro with kernel 5.10+
 - The Mesa drivers in these distributions have excellent VirtIO support
@@ -116,7 +145,7 @@ If you encounter graphical issues:
 For debugging or special use cases:
 
 - Add `-enable-kvm` on Linux hosts for KVM acceleration
-- Add `-enable-whpx` on Windows hosts for Hyper-V acceleration
+- Add `-accel whpx` on Windows hosts for Hyper-V acceleration
 - Add `-monitor stdio` to access the QEMU monitor
 - Add `-usb -device usb-tablet` for better mouse integration
 

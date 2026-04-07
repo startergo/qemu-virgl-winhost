@@ -132,7 +132,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     sed -i 's/SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");/#ifdef SDL_HINT_ANGLE_FAST_PATH\n            SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");\n#endif/' ui/sdl2.c && \
     patch -p3 < /patches/0001-Virgil3D-with-SDL2-OpenGL.patch && \
     patch -p3 < /patches/0002-Virgil3D-macOS-GLSL-version.patch && \
-    patch -p1 < /patches/qemu-10.1.2-sdl-clipboard.patch && \
+    patch -p1 < /patches/qemu-sdl-clipboard.patch && \
     export NOCONFIGURE=1 && \
     export MESON=/usr/local/bin/meson && \
     ./configure --target-list=x86_64-softmmu \

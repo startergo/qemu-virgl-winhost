@@ -61,6 +61,7 @@ COPY angle/include/ /usr/x86_64-w64-mingw32/sys-root/mingw/include/
 COPY angle/egl.pc /usr/x86_64-w64-mingw32/sys-root/mingw/lib/pkgconfig/
 COPY angle/glesv2.pc /usr/x86_64-w64-mingw32/sys-root/mingw/lib/pkgconfig/
 COPY WinHv*.h /usr/x86_64-w64-mingw32/sys-root/mingw/include/
+ARG PATCH_CACHE_BUST=1
 COPY patches/ /patches/
 
 RUN git clone https://github.com/anholt/libepoxy.git && \
@@ -116,10 +117,8 @@ RUN git clone https://gitlab.freedesktop.org/spice/spice.git && \
     ninja -C build install
 
 # Build virglrenderer from the main development branch
-RUN mkdir -p /virglrenderer && \
+RUN git clone --depth=1 https://gitlab.freedesktop.org/virgl/virglrenderer.git /virglrenderer && \
     cd /virglrenderer && \
-    curl -L https://gitlab.freedesktop.org/virgl/virglrenderer/-/archive/main/virglrenderer-main.tar.gz -o virglrenderer.tar.gz && \
-    tar -xzf virglrenderer.tar.gz --strip-components=1 && \
     patch -p2 < /patches/0001-Virglrenderer-on-Windows-and-macOS.patch && \
     mingw64-meson build/ -Dplatforms=egl -Dminigbm_allocation=false && \
     ninja -C build -j${BUILD_JOBS} && \

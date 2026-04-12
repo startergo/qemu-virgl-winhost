@@ -10,13 +10,12 @@
  #include "ui/kbd-state.h"
  #ifdef CONFIG_OPENGL
  # include "ui/egl-helpers.h"
-@@ -45,5 +48,9 @@
+@@ -45,5 +48,8 @@
      bool gui_keysym;
      SDL_GLContext winctx;
      QKbdState *kbd;
 +#ifdef CONFIG_SDL_CLIPBOARD
 +    QemuClipboardPeer cbpeer;
-+    bool clipboard_active;
 +#endif
      bool has_dmabuf;
  #ifdef CONFIG_OPENGL
@@ -111,20 +110,22 @@
          default:
              break;
          }
-@@ -911,6 +922,10 @@
+@@ -911,6 +922,12 @@
          }
          register_displaychangelistener(&sdl2_console[i].dcl);
  
 +
 +#ifdef CONFIG_SDL_CLIPBOARD
-+        sdl2_clipboard_init(&sdl2_console[i]);
++        if (i == 0) {
++            sdl2_clipboard_init(&sdl2_console[i]);
++        }
 +#endif
  #if defined(SDL_VIDEO_DRIVER_WINDOWS) || defined(SDL_VIDEO_DRIVER_X11)
          if (SDL_GetWindowWMInfo(sdl2_console[i].real_window, &info)) {
  #if defined(SDL_VIDEO_DRIVER_WINDOWS)
 --- qemu-10.1.2/ui/sdl2-clipboard.c	1969-12-31 19:00:00
 +++ qemu-10.1.2-patched/ui/sdl2-clipboard.c	2025-11-26 09:07:45
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,309 @@
 +/*
 + * SDL UI -- clipboard support
 + *
@@ -135,31 +136,81 @@
 + */
 +
 +#include "qemu/osdep.h"
++#include "qemu/error-report.h"
 +#include "ui/console.h"
 +#include "ui/clipboard.h"
 +#include "ui/sdl2.h"
 +
-+/*
-+ * Counts how many SDL_CLIPBOARDUPDATE events to suppress after we call
-+ * SDL_SetClipboardText() with guest data.  Windows fires WM_CLIPBOARDUPDATE
-+ * after CloseClipboard(); set to 1 each time we write to the SDL clipboard
-+ * so the resulting echo does not steal clipboard ownership from the guest.
-+ */
-+static int suppress_clipboard_echo;
++#define SDL_CLIPBOARD_DEBUG 0
++#if SDL_CLIPBOARD_DEBUG
++#define DPRINTF(fmt, ...) DPRINTF("" fmt, ##__VA_ARGS__)
++#else
++#define DPRINTF(fmt, ...) do {} while (0)
++#endif
 +
 +/*
-+ * Set while we have an outstanding asynchronous request for guest clipboard
-+ * data.  Prevents sdl2_clipboard_handle_request from announcing host
-+ * clipboard ownership (which would cancel the in-flight transfer).
++ * Last text written to the SDL (host) clipboard from guest data, stored in
++ * SDL-normalised form (SDL converts \n to \r\n on Windows).
++ *
++ * SDL_CLIPBOARDUPDATE events whose text matches this string are echoes
++ * produced by our own SDL_SetClipboardText() call and must be discarded.
++ *
++ * Never cleared eagerly so that lingering echoes are always caught.
++ */
++static char *last_guest_text;
++
++/*
++ * Last text pushed from the host clipboard to QEMU.  Deduplicates repeated
++ * SDL_CLIPBOARDUPDATE events with the same host-side content (e.g. KDE
++ * Klipper re-announcing on focus changes).
++ *
++ * Cleared on each new guest clipboard grab so that the host can re-push the
++ * same text after the guest has changed its own clipboard.
++ */
++static char *last_host_text;
++
++/*
++ * Set while a qemu_clipboard_request() for guest data is in flight.
++ * Prevents handle_request from pushing host clipboard data, which would
++ * cancel the vdagent data response mid-transfer.
++ * Cleared when data arrives, on RESET_SERIAL, or on focus lost.
 + */
 +static bool guest_clipboard_pending;
 +
 +/*
-+ * Last text pushed to QEMU from the host side.  Used to skip duplicate
-+ * SDL_CLIPBOARDUPDATE events (e.g. from KDE Klipper re-announcing the same
-+ * content on focus changes).
++ * Set after RESET_SERIAL; cleared when vdagent sends the first clipboard
++ * GRAB (meaning the vdagent channel has fully settled and spice-vdagent
++ * owns X11 CLIPBOARD again).
++ *
++ * While set, host clipboard pushes are suppressed to prevent the startup
++ * SDL_CLIPBOARDUPDATE from forwarding a stale GRAB to spice-vdagent before
++ * the channel stabilises.  That stale GRAB causes spice-vdagent to release
++ * X11 CLIPBOARD, permanently breaking subsequent guest→host transfers.
++ *
++ * Cleared on any guest clipboard notification (even a failed one) so that
++ * host→guest still works when spice-vdagent cannot serve guest data (e.g.
++ * KDE Wayland where the Mutter DBUS API is unavailable).
 + */
-+static char *last_host_text;
++static bool settling = true;
++
++/*
++ * Monotonic time (µs) after which settling clears automatically.
++ * Set on each RESET_SERIAL; expires 5 s later so host→guest works even
++ * when spice-vdagent is absent or cannot announce a clipboard GRAB
++ * (e.g. KDE Wayland where Mutter DBUS is unavailable).
++ */
++static gint64 settle_deadline;
++
++/*
++ * The sdl2_console that owns the clipboard peer.SDL_CLIPBOARDUPDATE is a
++ * global event with no window ID, so sdl2_poll_events() may dispatch it with
++ * whatever scon is being iterated (e.g. sdl2_console[1] when there are
++ * multiple outputs).  Using the wrong scon makes qemu_clipboard_info_new()
++ * set info->owner = &sdl2_console[1].cbpeer, which differs from the peer
++ * registered in sdl2_clipboard_init(&sdl2_console[0]) and breaks the
++ * self-update guard in the notifier.  Always track the one true scon here.
++ */
++static struct sdl2_console *sdl_clipboard_scon;
 +
 +static void sdl2_clipboard_notify(Notifier *notifier, void *data)
 +{
@@ -169,55 +220,82 @@
 +
 +    switch (notify->type) {
 +    case QEMU_CLIPBOARD_UPDATE_INFO:
++        DPRINTF("notify UPDATE_INFO sel=%d",
++                    notify->info->selection);
 +        /*
-+         * self_update check must be inside UPDATE_INFO: for RESET_SERIAL,
-+         * notify->info may be NULL and dereferencing it before the switch
-+         * would crash.
++         * Only sync the CLIPBOARD selection.  PRIMARY announcements from the
++         * guest can carry stale data and overwrite the Windows clipboard.
 +         */
++        if (notify->info->selection != QEMU_CLIPBOARD_SELECTION_CLIPBOARD) {
++            return;
++        }
 +        if (notify->info->owner == &scon->cbpeer) {
++            DPRINTF("notify UPDATE_INFO self-update, skip");
 +            return;
 +        }
 +        if (!notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].available) {
++            DPRINTF("notify UPDATE_INFO text not available");
++            guest_clipboard_pending = false;
++            settling = false;
 +            return;
 +        }
 +        if (!notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].data) {
-+            /*
-+             * Data not yet available — request it from the guest.
-+             * QEMU's internal "requested" flag prevents duplicate requests
-+             * for the same info object.
-+             */
++            if (guest_clipboard_pending) {
++                DPRINTF("notify UPDATE_INFO data not ready, "
++                            "already pending — skipping duplicate request");
++                return;
++            }
++            DPRINTF("notify UPDATE_INFO data not ready, "
++                        "requesting from guest");
++            g_clear_pointer(&last_host_text, g_free);
++            settling = false;
 +            guest_clipboard_pending = true;
 +            qemu_clipboard_request(notify->info, QEMU_CLIPBOARD_TYPE_TEXT);
 +            return;
 +        }
 +        {
-+            /* Data is available — push to the SDL (host) clipboard. */
 +            size_t text_size =
 +                notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].size;
 +            const char *text_data;
 +            g_autofree char *text = NULL;
++            char *normalized;
 +
 +            guest_clipboard_pending = false;
 +            if (text_size == 0) {
++                DPRINTF("notify UPDATE_INFO data size 0");
 +                return;
 +            }
 +            text_data =
 +                (const char *)notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].data;
 +            text = g_strndup(text_data, text_size);
-+            if (text && text[0] != '\0') {
-+                /*
-+                 * Arm the echo counter before writing so that the Windows
-+                 * WM_CLIPBOARDUPDATE event posted by CloseClipboard() is
-+                 * caught by sdl2_clipboard_handle_request before it can
-+                 * steal clipboard ownership from the guest.
-+                 */
-+                suppress_clipboard_echo = 1;
-+                SDL_SetClipboardText(text);
++            DPRINTF("notify UPDATE_INFO setting SDL "
++                        "clipboard (%.40s)", text ? text : "(null)");
++            if (!text || text[0] == '\0') {
++                return;
++            }
++            SDL_SetClipboardText(text);
++            /*
++             * Read back the SDL-normalised form (\n -> \r\n on Windows) and
++             * store it.  Echo events carry this normalised text so we must
++             * compare against it, not the raw guest string.
++             */
++            normalized = SDL_GetClipboardText();
++            if (normalized) {
++                g_free(last_guest_text);
++                last_guest_text = g_strdup(normalized);
++                SDL_free(normalized);
 +            }
 +        }
 +        break;
 +    case QEMU_CLIPBOARD_RESET_SERIAL:
++        DPRINTF("notify RESET_SERIAL");
 +        guest_clipboard_pending = false;
++        g_clear_pointer(&last_host_text, g_free);
++        settling = true;
++        settle_deadline = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
++        break;
++    default:
++        DPRINTF("notify unknown type=%d", notify->type);
 +        break;
 +    }
 +}
@@ -232,11 +310,14 @@
 +    }
 +    text = SDL_GetClipboardText();
 +    if (!text || !text[0]) {
++        DPRINTF("request host clipboard empty");
 +        if (text) {
 +            SDL_free(text);
 +        }
 +        return;
 +    }
++    DPRINTF("request providing host text to guest (%.40s)",
++                text);
 +    qemu_clipboard_set_data(info->owner, info, type,
 +                            strlen(text), text, true);
 +    SDL_free(text);
@@ -244,20 +325,23 @@
 +
 +void sdl2_clipboard_init(struct sdl2_console *scon)
 +{
++    sdl_clipboard_scon = scon;
 +    scon->cbpeer.name = "sdl2-clipboard";
 +    scon->cbpeer.notifier.notify = sdl2_clipboard_notify;
 +    scon->cbpeer.request = sdl2_clipboard_request;
-+    scon->clipboard_active = true;
 +    qemu_clipboard_peer_register(&scon->cbpeer);
++    DPRINTF("initialized");
 +}
 +
 +void sdl2_clipboard_handle_focus_change(struct sdl2_console *scon,
 +                                        bool gained_focus)
 +{
-+    if (gained_focus) {
-+        scon->clipboard_active = true;
-+    } else {
-+        scon->clipboard_active = false;
++    DPRINTF("focus %s", gained_focus ? "gained" : "lost");
++    if (!gained_focus) {
++        /*
++         * Clear in-flight flag on focus lost so that a subsequent focus-gained
++         * (followed by a new guest grab) is not blocked.
++         */
 +        guest_clipboard_pending = false;
 +    }
 +}
@@ -267,15 +351,32 @@
 +    QemuClipboardInfo *info;
 +    char *text;
 +
-+    if (!scon->clipboard_active) {
++    /*
++     * SDL_CLIPBOARDUPDATE has no window ID; the caller's scon may belong to
++     * a secondary output.  Always operate on the registered clipboard scon so
++     * that info->owner matches the registered peer and the self-update guard
++     * in sdl2_clipboard_notify fires correctly.
++     */
++    if (!sdl_clipboard_scon) {
 +        return;
 +    }
-+    /*
-+     * Do not announce host clipboard ownership while waiting for guest data;
-+     * that would cancel the in-flight data response from the guest.
++    scon = sdl_clipboard_scon;
++/*
++     * Do not push host clipboard while a guest transfer is in flight:
++     * it would cancel the vdagent data response mid-transfer.
 +     */
 +    if (guest_clipboard_pending) {
++        DPRINTF("SDL_CLIPBOARDUPDATE ignored "
++                    "(guest transfer pending)");
 +        return;
++    }
++    if (settling) {
++        if (g_get_monotonic_time() < settle_deadline) {
++            DPRINTF("SDL_CLIPBOARDUPDATE ignored (settling)");
++            return;
++        }
++        DPRINTF("settle timeout expired, clipboard active");
++        settling = false;
 +    }
 +    if (!SDL_HasClipboardText()) {
 +        return;
@@ -287,35 +388,62 @@
 +        }
 +        return;
 +    }
++    DPRINTF("SDL_CLIPBOARDUPDATE text=(%.40s)", text);
 +    /*
-+     * Suppress the echo SDL_CLIPBOARDUPDATE that Windows posts after each
-+     * SDL_SetClipboardText() call in sdl2_clipboard_notify.  The counter was
-+     * armed to 1 before writing; it is decremented here and the event
-+     * silently discarded.  Any genuine host clipboard change that arrives
-+     * after the echo has been consumed is processed normally.
++     * Echo suppression: every SDL_CLIPBOARDUPDATE triggered by our own
++     * SDL_SetClipboardText() carries the SDL-normalised text stored in
++     * last_guest_text.  Discard it.
 +     */
-+    if (suppress_clipboard_echo > 0) {
-+        suppress_clipboard_echo--;
++    if (last_guest_text && strcmp(last_guest_text, text) == 0) {
++        DPRINTF("echo suppressed by text-match");
 +        SDL_free(text);
 +        return;
 +    }
 +    /*
-+     * Deduplicate: skip events where the host clipboard content has not
-+     * changed since our last push to QEMU (e.g. KDE Klipper re-announcing
-+     * the same text on a focus change).
++     * Deduplicate genuine host clipboard changes.  last_host_text is cleared
++     * on each new guest grab so the same host text can be forwarded again
++     * after the guest has changed its clipboard.
 +     */
 +    if (last_host_text && strcmp(last_host_text, text) == 0) {
++        DPRINTF("host clipboard unchanged, skip");
 +        SDL_free(text);
 +        return;
 +    }
 +    g_free(last_host_text);
 +    last_host_text = g_strdup(text);
++    DPRINTF("pushing host clipboard to QEMU (%.40s)", text);
 +
 +    info = qemu_clipboard_info_new(&scon->cbpeer,
 +                                   QEMU_CLIPBOARD_SELECTION_CLIPBOARD);
 +    qemu_clipboard_set_data(&scon->cbpeer, info, QEMU_CLIPBOARD_TYPE_TEXT,
 +                            strlen(text), text, false);
++    /*
++     * Preserve the current serial without incrementing it.  Without this,
++     * vdagent_send_clipboard_grab bumps last_serial[s] on every host push.
++     * After N pushes, the guest's serial counter (managed by spice-vdagent)
++     * falls below last_serial and all subsequent guest GRABs are discarded.
++     */
++    {
++        QemuClipboardInfo *cur =
++            qemu_clipboard_info(QEMU_CLIPBOARD_SELECTION_CLIPBOARD);
++        if (cur && cur->has_serial) {
++            info->has_serial = true;
++            info->serial = cur->serial;
++        }
++    }
 +    qemu_clipboard_update(info);
 +    qemu_clipboard_info_unref(info);
 +    SDL_free(text);
 +}
+diff --git a/ui/vdagent.c b/ui/vdagent.c
+index bb0c4aa..6369cd8 100644
+--- a/ui/vdagent.c
++++ b/ui/vdagent.c
+@@ -192,6 +192,7 @@ static void vdagent_send_caps(VDAgentChardev *vd, bool request)
+         caps->caps[0] |= (1 << VD_AGENT_CAP_CLIPBOARD_BY_DEMAND);
+         caps->caps[0] |= (1 << VD_AGENT_CAP_CLIPBOARD_SELECTION);
+         caps->caps[0] |= (1 << VD_AGENT_CAP_CLIPBOARD_GRAB_SERIAL);
++        caps->caps[0] |= (1 << VD_AGENT_CAP_CLIPBOARD_NO_RELEASE_ON_REGRAB);
+     }
+ 
+     caps->request = request;

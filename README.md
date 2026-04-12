@@ -115,6 +115,113 @@ systemctl --user enable --now spice-vdagentd
 sudo apt install spice-vdagent
 ```
 
+#### KDE Wayland guests — additional setup for reliable clipboard sync
+
+On KDE Wayland, `spice-vdagent` monitors the X11 clipboard via XFixes rather than the
+native Wayland clipboard. This means only the first guest→host copy works unless you
+bridge the Wayland clipboard to X11. The following one-time setup makes every copy work:
+
+1. **Configure spice-vdagent to use XFixes mode** (create/update the override):
+
+   ```bash
+   mkdir -p ~/.config/systemd/user/spice-vdagent.service.d
+   cat > ~/.config/systemd/user/spice-vdagent.service.d/override.conf << 'EOF'
+   [Service]
+   ExecStart=
+   ExecStart=/usr/bin/spice-vdagent -x
+   Environment=DISPLAY=:1
+   PassEnvironment=XAUTHORITY
+   Restart=on-failure
+   RestartSec=3s
+   EOF
+   ```
+
+2. **Install clipboard bridge tools**:
+
+   ```bash
+   sudo pacman -S wl-clipboard xclip   # Arch/EndeavourOS
+   # sudo apt install wl-clipboard xclip  # Ubuntu/Debian
+   ```
+
+3. **Create the bridge polling daemon**:
+
+   ```bash
+   mkdir -p ~/.local/bin
+   cat > ~/.local/bin/wl-x11-cb.sh << 'EOF'
+   #!/bin/bash
+   # Polls Wayland clipboard every 0.3 s and mirrors it to X11 so that
+   # spice-vdagent's XFixes watcher fires on every copy, not just the first.
+   [ -z "$DISPLAY" ] && export DISPLAY=:1
+   LAST=""
+   while true; do
+       sleep 0.3
+       if [ -z "$XAUTHORITY" ]; then
+           f=$(ls /run/user/1000/xauth_* 2>/dev/null | head -1)
+           [ -n "$f" ] && export XAUTHORITY="$f"
+           [ -z "$XAUTHORITY" ] && continue
+       fi
+       current=$(wl-paste --no-newline 2>/dev/null) || continue
+       [ -z "$current" ] && continue
+       [ "$current" = "$LAST" ] && continue
+       LAST="$current"
+       # Start new xclip; it takes X11 ownership immediately, causing the old
+       # xclip to receive SelectionClear and exit — no manual kill needed.
+       printf '%s' "$current" | xclip -selection clipboard -i -loops 0 &
+   done
+   EOF
+   chmod +x ~/.local/bin/wl-x11-cb.sh
+   ```
+
+4. **Create and enable the bridge service**:
+
+   ```bash
+   cat > ~/.config/systemd/user/wl-x11-clip.service << 'EOF'
+   [Unit]
+   Description=Wayland to X11 clipboard bridge for spice-vdagent
+   After=plasma-kwin_wayland.service graphical-session.target
+
+   [Service]
+   Type=simple
+   ExecStartPre=/bin/bash -c 'for i in $(seq 30); do [ -S /run/user/1000/wayland-0 ] && exit 0; sleep 1; done; exit 1'
+   ExecStart=%h/.local/bin/wl-x11-cb.sh
+   Environment=WAYLAND_DISPLAY=wayland-0
+   Environment=DISPLAY=:1
+   Restart=on-failure
+   RestartSec=5s
+
+   [Install]
+   WantedBy=graphical-session.target
+   EOF
+
+   systemctl --user daemon-reload
+   systemctl --user enable wl-x11-clip
+   systemctl --user start wl-x11-clip
+   systemctl --user restart spice-vdagent
+   ```
+
+This bridge polls the Wayland clipboard every 300 ms. Each change starts a fresh
+`xclip` process that takes X11 ownership, causing the previous xclip to exit via the
+standard `SelectionClear` protocol — so XFixes fires reliably on every copy and
+`spice-vdagent` sends a new GRAB each time.
+
+#### Enabling clipboard debug logging
+
+The clipboard code is compiled with debug logging disabled by default. To enable
+verbose `warn_report` output for all clipboard events, set `SDL_CLIPBOARD_DEBUG 1`
+in `patches/qemu-sdl-clipboard.patch` (near the top of the `ui/sdl2-clipboard.c`
+section) and rebuild:
+
+```diff
+-#define SDL_CLIPBOARD_DEBUG 0
++#define SDL_CLIPBOARD_DEBUG 1
+```
+
+Then rebuild:
+
+```bash
+docker build --build-arg PATCH_CACHE_BUST=$RANDOM -t qemu-virgl-win-cross .
+```
+
 For optimal Linux guest experience:
 - Use Ubuntu 20.04 or newer, Fedora 34+, or any recent distro with kernel 5.10+
 - The Mesa drivers in these distributions have excellent VirtIO support

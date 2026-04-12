@@ -1,0 +1,2 @@
+# Patch files must keep LF line endings — CRLF breaks patch(1) inside Docker
+patches/*.patch  text  eol=lf

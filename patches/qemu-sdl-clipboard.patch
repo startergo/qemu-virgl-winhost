@@ -10,14 +10,13 @@
  #include "ui/kbd-state.h"
  #ifdef CONFIG_OPENGL
  # include "ui/egl-helpers.h"
-@@ -45,5 +48,10 @@
+@@ -45,5 +48,9 @@
      bool gui_keysym;
      SDL_GLContext winctx;
      QKbdState *kbd;
 +#ifdef CONFIG_SDL_CLIPBOARD
 +    QemuClipboardPeer cbpeer;
 +    bool clipboard_active;
-+    uint32_t last_focus_time;
 +#endif
      bool has_dmabuf;
  #ifdef CONFIG_OPENGL
@@ -125,139 +124,100 @@
  #if defined(SDL_VIDEO_DRIVER_WINDOWS)
 --- qemu-10.1.2/ui/sdl2-clipboard.c	1969-12-31 19:00:00
 +++ qemu-10.1.2-patched/ui/sdl2-clipboard.c	2025-11-26 09:07:45
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,194 @@
 +/*
-+ * SDL UI -- clipboard support (improved async version)
++ * SDL UI -- clipboard support
 + *
 + * Copyright (C) 2023 Kamay Xutax <admin@xutaxkamay.com>
-+ * Copyright (C) 2025 startergo <startergo@protonmail.com>
++ * Copyright (C) 2025 startergo <startergo@users.noreply.github.com>
 + *
 + * SPDX-License-Identifier: GPL-2.0-or-later
 + */
 +
 +#include "qemu/osdep.h"
-+#include "qemu/error-report.h"
 +#include "ui/console.h"
 +#include "ui/clipboard.h"
 +#include "ui/sdl2.h"
 +
-+/* Track pending clipboard requests to handle async data */
-+typedef struct {
-+    struct sdl2_console *scon;
-+    QemuClipboardInfo *info;
-+    QemuClipboardType type;
-+    bool request_sent;
-+} SDLClipboardRequest;
++/*
++ * Counts how many SDL_CLIPBOARDUPDATE events to suppress after we call
++ * SDL_SetClipboardText() with guest data.  Windows fires WM_CLIPBOARDUPDATE
++ * after CloseClipboard(); set to 1 each time we write to the SDL clipboard
++ * so the resulting echo does not steal clipboard ownership from the guest.
++ */
++static int suppress_clipboard_echo;
 +
-+static SDLClipboardRequest *pending_request;
-+static char *last_clipboard_text;
++/*
++ * Set while we have an outstanding asynchronous request for guest clipboard
++ * data.  Prevents sdl2_clipboard_handle_request from announcing host
++ * clipboard ownership (which would cancel the in-flight transfer).
++ */
++static bool guest_clipboard_pending;
 +
-+static void sdl2_clipboard_clear_pending(void)
-+{
-+    if (pending_request) {
-+        if (pending_request->info) {
-+            qemu_clipboard_info_unref(pending_request->info);
-+        }
-+        g_clear_pointer(&pending_request, g_free);
-+    }
-+}
-+
-+static void sdl2_clipboard_reset_state(struct sdl2_console *scon)
-+{
-+    /* Clear any pending requests when clipboard state is reset */
-+    sdl2_clipboard_clear_pending();
-+    g_clear_pointer(&last_clipboard_text, g_free);
-+
-+    /* Force a fresh clipboard check after reconnection */
-+    if (scon->clipboard_active) {
-+        scon->last_focus_time = SDL_GetTicks();
-+    }
-+}
++/*
++ * Last text pushed to QEMU from the host side.  Used to skip duplicate
++ * SDL_CLIPBOARDUPDATE events (e.g. from KDE Klipper re-announcing the same
++ * content on focus changes).
++ */
++static char *last_host_text;
 +
 +static void sdl2_clipboard_notify(Notifier *notifier, void *data)
 +{
 +    QemuClipboardNotify *notify = data;
 +    struct sdl2_console *scon =
 +        container_of(notifier, struct sdl2_console, cbpeer.notifier);
-+    const char *text_data;
-+    size_t text_size;
 +
 +    switch (notify->type) {
 +    case QEMU_CLIPBOARD_UPDATE_INFO:
-+        {
++        /*
++         * self_update check must be inside UPDATE_INFO: for RESET_SERIAL,
++         * notify->info may be NULL and dereferencing it before the switch
++         * would crash.
++         */
++        if (notify->info->owner == &scon->cbpeer) {
++            return;
++        }
++        if (!notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].available) {
++            return;
++        }
++        if (!notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].data) {
 +            /*
-+             * self_update check must be inside UPDATE_INFO — for
-+             * RESET_SERIAL, notify->info may be NULL and dereferencing
-+             * it before the switch would crash.
++             * Data not yet available — request it from the guest.
++             * QEMU's internal "requested" flag prevents duplicate requests
++             * for the same info object.
 +             */
-+            bool self_update = notify->info->owner == &scon->cbpeer;
++            guest_clipboard_pending = true;
++            qemu_clipboard_request(notify->info, QEMU_CLIPBOARD_TYPE_TEXT);
++            return;
++        }
++        {
++            /* Data is available — push to the SDL (host) clipboard. */
++            size_t text_size =
++                notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].size;
++            const char *text_data;
++            g_autofree char *text = NULL;
 +
-+            /* Skip self-updates to avoid clipboard manager conflicts */
-+            if (self_update) {
-+                return;
-+            }
-+
-+            if (!notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].available) {
-+                return;
-+            }
-+
-+            /* Check if this is completion of our pending request */
-+            if (pending_request && pending_request->info == notify->info &&
-+                pending_request->type == QEMU_CLIPBOARD_TYPE_TEXT) {
-+                sdl2_clipboard_clear_pending();
-+            }
-+
-+            /* Check if data is available, request asynchronously if not */
-+            if (!notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].data) {
-+                /*
-+                 * Protect against request loops by checking if we already
-+                 * sent a request
-+                 */
-+                if (!pending_request || !pending_request->request_sent) {
-+                    sdl2_clipboard_clear_pending();
-+                    pending_request = g_new0(SDLClipboardRequest, 1);
-+                    pending_request->scon = scon;
-+                    pending_request->info =
-+                        qemu_clipboard_info_ref(notify->info);
-+                    pending_request->type = QEMU_CLIPBOARD_TYPE_TEXT;
-+                    pending_request->request_sent = true;
-+                    qemu_clipboard_request(notify->info,
-+                                           QEMU_CLIPBOARD_TYPE_TEXT);
-+                }
-+                return;
-+            }
-+
-+            /* Process available data */
-+            text_size = notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].size;
++            guest_clipboard_pending = false;
 +            if (text_size == 0) {
 +                return;
 +            }
-+
-+            text_data = (const char *)
-+                notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].data;
-+
-+            /* Ensure null termination for SDL clipboard */
-+            g_autofree char *text = g_strndup(text_data, text_size);
++            text_data =
++                (const char *)notify->info->types[QEMU_CLIPBOARD_TYPE_TEXT].data;
++            text = g_strndup(text_data, text_size);
 +            if (text && text[0] != '\0') {
 +                /*
-+                 * Only call SDL_SetClipboardText if the content has actually
-+                 * changed. Without this check a ping-pong loop forms:
-+                 *   SDL_SetClipboardText → SDL_CLIPBOARDUPDATE →
-+                 *   sdl2_clipboard_handle_request → qemu_clipboard_update →
-+                 *   guest echoes the same data back → sdl2_clipboard_notify →
-+                 *   SDL_SetClipboardText → … (repeats indefinitely)
-+                 * Comparing first breaks the loop on the second iteration.
++                 * Arm the echo counter before writing so that the Windows
++                 * WM_CLIPBOARDUPDATE event posted by CloseClipboard() is
++                 * caught by sdl2_clipboard_handle_request before it can
++                 * steal clipboard ownership from the guest.
 +                 */
-+                g_autofree char *current = SDL_HasClipboardText()
-+                    ? SDL_GetClipboardText() : NULL;
-+                if (!current || strcmp(current, text) != 0) {
-+                    SDL_SetClipboardText(text);
-+                }
++                suppress_clipboard_echo = 1;
++                SDL_SetClipboardText(text);
 +            }
-+            break;
 +        }
++        break;
 +    case QEMU_CLIPBOARD_RESET_SERIAL:
-+        sdl2_clipboard_reset_state(scon);
++        guest_clipboard_pending = false;
 +        break;
 +    }
 +}
@@ -265,22 +225,18 @@
 +static void sdl2_clipboard_request(QemuClipboardInfo *info,
 +                                   QemuClipboardType type)
 +{
-+    char *text = NULL;
++    char *text;
 +
 +    if (type != QEMU_CLIPBOARD_TYPE_TEXT) {
 +        return;
 +    }
-+
 +    text = SDL_GetClipboardText();
 +    if (!text || !text[0]) {
 +        if (text) {
-+            warn_report("SDL clipboard: Failed to get clipboard text: %s",
-+                        SDL_GetError());
 +            SDL_free(text);
 +        }
 +        return;
 +    }
-+
 +    qemu_clipboard_set_data(info->owner, info, type,
 +                            strlen(text), text, true);
 +    SDL_free(text);
@@ -292,72 +248,71 @@
 +    scon->cbpeer.notifier.notify = sdl2_clipboard_notify;
 +    scon->cbpeer.request = sdl2_clipboard_request;
 +    scon->clipboard_active = true;
-+    scon->last_focus_time = SDL_GetTicks();
-+
 +    qemu_clipboard_peer_register(&scon->cbpeer);
 +}
 +
 +void sdl2_clipboard_handle_focus_change(struct sdl2_console *scon,
-+                                         bool gained_focus)
++                                        bool gained_focus)
 +{
-+    uint32_t current_time = SDL_GetTicks();
-+
 +    if (gained_focus) {
-+        /* Reactivate clipboard after regaining focus */
 +        scon->clipboard_active = true;
-+        scon->last_focus_time = current_time;
-+
-+        /* Clear any stale pending requests */
-+        sdl2_clipboard_clear_pending();
-+
-+        /* Force a fresh clipboard sync after focus is regained */
-+        sdl2_clipboard_handle_request(scon);
 +    } else {
-+        /* Deactivate clipboard when losing focus to prevent conflicts */
 +        scon->clipboard_active = false;
-+        sdl2_clipboard_clear_pending();
++        guest_clipboard_pending = false;
 +    }
 +}
 +
 +void sdl2_clipboard_handle_request(struct sdl2_console *scon)
 +{
-+    char *text = NULL;
 +    QemuClipboardInfo *info;
++    char *text;
 +
-+    /* Skip if clipboard is not active */
 +    if (!scon->clipboard_active) {
 +        return;
 +    }
-+
++    /*
++     * Do not announce host clipboard ownership while waiting for guest data;
++     * that would cancel the in-flight data response from the guest.
++     */
++    if (guest_clipboard_pending) {
++        return;
++    }
++    if (!SDL_HasClipboardText()) {
++        return;
++    }
 +    text = SDL_GetClipboardText();
 +    if (!text || !text[0]) {
 +        if (text) {
 +            SDL_free(text);
 +        }
-+        return; /* Ignore empty clipboard */
++        return;
 +    }
-+
 +    /*
-+     * Skip duplicate updates. KDE's Klipper fires many rapid
-+     * SDL_CLIPBOARDUPDATE events at login; without this guard every event
-+     * floods qemu-vdagent and can trigger a use-after-free crash.
++     * Suppress the echo SDL_CLIPBOARDUPDATE that Windows posts after each
++     * SDL_SetClipboardText() call in sdl2_clipboard_notify.  The counter was
++     * armed to 1 before writing; it is decremented here and the event
++     * silently discarded.  Any genuine host clipboard change that arrives
++     * after the echo has been consumed is processed normally.
 +     */
-+    if (last_clipboard_text && strcmp(last_clipboard_text, text) == 0) {
++    if (suppress_clipboard_echo > 0) {
++        suppress_clipboard_echo--;
 +        SDL_free(text);
 +        return;
 +    }
-+    g_free(last_clipboard_text);
-+    last_clipboard_text = g_strdup(text);
++    /*
++     * Deduplicate: skip events where the host clipboard content has not
++     * changed since our last push to QEMU (e.g. KDE Klipper re-announcing
++     * the same text on a focus change).
++     */
++    if (last_host_text && strcmp(last_host_text, text) == 0) {
++        SDL_free(text);
++        return;
++    }
++    g_free(last_host_text);
++    last_host_text = g_strdup(text);
 +
 +    info = qemu_clipboard_info_new(&scon->cbpeer,
 +                                   QEMU_CLIPBOARD_SELECTION_CLIPBOARD);
-+    /*
-+     * Pass update=false here because we call qemu_clipboard_update()
-+     * explicitly below. Passing true would trigger a double-notification
-+     * (set_data calls update internally, then we call it again), which
-+     * causes vdagent to process the same clipboard info twice and can
-+     * lead to a use-after-free when the info is released.
-+     */
 +    qemu_clipboard_set_data(&scon->cbpeer, info, QEMU_CLIPBOARD_TYPE_TEXT,
 +                            strlen(text), text, false);
 +    qemu_clipboard_update(info);

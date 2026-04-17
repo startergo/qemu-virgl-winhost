@@ -133,7 +133,6 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     patch -p3 --batch --verbose < /patches/0001-Virgil3D-with-SDL2-OpenGL.patch && \
     patch -p3 --batch --verbose < /patches/0002-Virgil3D-macOS-GLSL-version.patch && \
     patch -p1 --batch --verbose < /patches/qemu-sdl-clipboard.patch && \
-    patch -p1 --batch --verbose < /patches/virgl-gles-flags.patch && \
     export NOCONFIGURE=1 && \
     export MESON=/usr/local/bin/meson && \
     ./configure --target-list=x86_64-softmmu \

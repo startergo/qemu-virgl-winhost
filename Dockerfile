@@ -120,7 +120,7 @@ RUN git clone https://gitlab.freedesktop.org/spice/spice.git && \
 RUN git clone --depth=1 https://gitlab.freedesktop.org/virgl/virglrenderer.git /virglrenderer && \
     cd /virglrenderer && \
     patch -p2 --batch --verbose < /patches/0001-Virglrenderer-on-Windows-and-macOS.patch && \
-    patch -p2 --batch --verbose < /patches/0002-virglrenderer-angle-gles-fixes.patch && \
+    patch -p1 --batch --verbose < /patches/0002-virglrenderer-angle-gles-fixes.patch && \
     mingw64-meson build/ -Dplatforms=egl -Dminigbm_allocation=false && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install

@@ -120,6 +120,7 @@ RUN git clone https://gitlab.freedesktop.org/spice/spice.git && \
 RUN git clone --depth=1 https://gitlab.freedesktop.org/virgl/virglrenderer.git /virglrenderer && \
     cd /virglrenderer && \
     patch -p2 --batch --verbose < /patches/0001-Virglrenderer-on-Windows-and-macOS.patch && \
+    patch -p2 --batch --verbose < /patches/0002-virglrenderer-angle-gles-fixes.patch && \
     mingw64-meson build/ -Dplatforms=egl -Dminigbm_allocation=false && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install
@@ -132,6 +133,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     patch -p3 --batch --verbose < /patches/0001-Virgil3D-with-SDL2-OpenGL.patch && \
     patch -p3 --batch --verbose < /patches/0002-Virgil3D-macOS-GLSL-version.patch && \
     patch -p1 --batch --verbose < /patches/qemu-sdl-clipboard.patch && \
+    patch -p1 --batch --verbose < /patches/virgl-gles-flags.patch && \
     export NOCONFIGURE=1 && \
     export MESON=/usr/local/bin/meson && \
     ./configure --target-list=x86_64-softmmu \

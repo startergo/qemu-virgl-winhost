@@ -121,6 +121,9 @@ RUN git clone --depth=1 https://gitlab.freedesktop.org/virgl/virglrenderer.git /
     cd /virglrenderer && \
     patch -p2 --batch --verbose < /patches/0001-Virglrenderer-on-Windows-and-macOS.patch && \
     patch -p1 --batch --verbose < /patches/0002-virglrenderer-angle-gles-fixes.patch && \
+    patch -p1 --batch --verbose < /patches/0003-virglrenderer-angle-caps-gating.patch && \
+    patch -p1 --batch --verbose < /patches/0004-virglrenderer-gles-copy-image-fallback.patch && \
+    patch -p1 --batch --verbose < /patches/0005-virglrenderer-global-log-level-filter.patch && \
     mingw64-meson build/ -Dplatforms=egl -Dminigbm_allocation=false && \
     ninja -C build -j${BUILD_JOBS} && \
     ninja -C build install
@@ -132,6 +135,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     sed -i 's/SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");/#ifdef SDL_HINT_ANGLE_FAST_PATH\n            SDL_SetHint(SDL_HINT_ANGLE_FAST_PATH, "1");\n#endif/' ui/sdl2.c && \
     patch -p3 --batch --verbose < /patches/0001-Virgil3D-with-SDL2-OpenGL.patch && \
     patch -p3 --batch --verbose < /patches/0002-Virgil3D-macOS-GLSL-version.patch && \
+    patch -p1 --batch --verbose < /patches/qemu-sdl-gles-angle.patch && \
     patch -p1 --batch --verbose < /patches/qemu-sdl-clipboard.patch && \
     export NOCONFIGURE=1 && \
     export MESON=/usr/local/bin/meson && \

@@ -103,14 +103,33 @@ diff -Nru orig/virglrenderer-1.3.0/src/vrend/vrend_renderer.c src/virglrenderer-
     if (err == GL_NO_ERROR)
        return true;
  
-@@ -7656,6 +7660,7 @@
+@@ -7656,10 +7660,26 @@
        virgl_info("gl_version %d - compat profile\n", gl_ver);
     }
  
-+   vrend_state.gl_apple = (strcmp((const char *)glGetString(GL_VENDOR), "Apple") == 0);
++   const char *host_vendor = (const char *)glGetString(GL_VENDOR);
++   const char *host_renderer = (const char *)glGetString(GL_RENDERER);
++   const char *host_version = (const char *)glGetString(GL_VERSION);
++   const char *host_glsl = (const char *)glGetString(GL_SHADING_LANGUAGE_VERSION);
++   vrend_state.gl_apple = (host_vendor && strcmp(host_vendor, "Apple") == 0);
     vrend_state.use_integer = use_integer();
  
     init_features(gles ? 0 : gl_ver,
+                  gles ? gl_ver : 0);
++
++   virgl_info("host GL strings: vendor=%s renderer=%s version=%s glsl=%s\n",
++              host_vendor ? host_vendor : "<null>",
++              host_renderer ? host_renderer : "<null>",
++              host_version ? host_version : "<null>",
++              host_glsl ? host_glsl : "<null>");
++   virgl_info("host GL mode: gles=%d use_gles=%d use_core_profile=%d gl_ver=%d\n",
++              gles, vrend_state.use_gles, vrend_state.use_core_profile, gl_ver);
++   virgl_info("host GL features: gles31_compat=%d texture_storage=%d storage_multisample=%d gles_khr_robustness=%d\n",
++              has_feature(feat_gles31_compatibility), has_feature(feat_texture_storage),
++              has_feature(feat_storage_multisample), has_feature(feat_gles_khr_robustness));
+ 
+    if (!vrend_winsys_has_gl_colorspace())
+       clear_feature(feat_srgb_write_control) ;
 @@ -8020,6 +8025,7 @@
     grctx->shader_cfg.has_gpu_shader5 = has_feature(feat_gpu_shader5);
     grctx->shader_cfg.has_es31_compat = has_feature(feat_gles31_compatibility);
@@ -203,6 +222,10 @@ diff -Nru orig/virglrenderer-1.3.0/src/vrend/vrend_shader.c src/virglrenderer-1.
 
           if (ctx->shader_req_bits & shader_req_table[i].key) {
              emit_ext(glsl_strbufs, shader_req_table[i].string, "require");
+            }
+        }
+    }
+}
 diff -Nru orig/virglrenderer-1.3.0/src/vrend/vrend_shader.h src/virglrenderer-1.3.0/src/vrend/vrend_shader.h
 --- orig/virglrenderer-1.3.0/src/vrend/vrend_shader.h
 +++ src/virglrenderer-1.3.0/src/vrend/vrend_shader.h

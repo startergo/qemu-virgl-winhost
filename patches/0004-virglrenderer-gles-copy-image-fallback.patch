@@ -1,0 +1,62 @@
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 483920f..64435a3 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -10728,9 +10728,14 @@ void vrend_renderer_resource_copy_region(struct vrend_context *ctx,
+    if (dst_res->egl_image)
+       comp_flags ^= VREND_COPY_COMPAT_FLAG_ONE_IS_EGL_IMAGE;
+ 
+-   if (has_feature(feat_copy_image) &&
+-       format_is_copy_compatible(src_res->base.format,dst_res->base.format, comp_flags) &&
+-       src_res->base.nr_samples == dst_res->base.nr_samples) {
++   bool allow_copy_image = has_feature(feat_copy_image) &&
++                          format_is_copy_compatible(src_res->base.format, dst_res->base.format, comp_flags) &&
++                          src_res->base.nr_samples == dst_res->base.nr_samples;
++
++   if (allow_copy_image && vrend_state.use_gles)
++      allow_copy_image = false;
++
++   if (allow_copy_image) {
+       VREND_DEBUG(dbg_copy_resource, ctx, "COPY_REGION: use glCopyImageSubData\n");
+       vrend_copy_sub_image(src_res, dst_res, src_level, src_box,
+                            dst_level, dstx, dsty, dstz);
+@@ -11310,20 +11315,25 @@ void vrend_renderer_blit(struct vrend_context *ctx,
+     * to resource_copy_region, in this case and if no render states etx need
+     * to be applied, forward the call to glCopyImageSubData, otherwise do a
+     * normal blit. */
+-   if (has_feature(feat_copy_image) &&
+-       (!info->render_condition_enable || !ctx->sub->cond_render_gl_mode) &&
+-       format_is_copy_compatible(info->src.format,info->dst.format, comp_flags) &&
+-       eglimage_copy_compatible &&
+-       !info->scissor_enable && (info->filter == PIPE_TEX_FILTER_NEAREST) &&
+-       !info->alpha_blend && (info->mask == PIPE_MASK_RGBA) &&
+-       src_res->base.nr_samples == dst_res->base.nr_samples &&
+-       info->src.box.x + info->src.box.width  <= src_width &&
+-       info->dst.box.x + info->dst.box.width  <= dst_width &&
+-       info->src.box.y + info->src.box.height <= src_height &&
+-       info->dst.box.y + info->dst.box.height <= dst_height &&
+-       info->src.box.width == info->dst.box.width &&
+-       info->src.box.height == info->dst.box.height &&
+-       info->src.box.depth == info->dst.box.depth) {
++   bool allow_copy_image = has_feature(feat_copy_image) &&
++                          (!info->render_condition_enable || !ctx->sub->cond_render_gl_mode) &&
++                          format_is_copy_compatible(info->src.format, info->dst.format, comp_flags) &&
++                          eglimage_copy_compatible &&
++                          !info->scissor_enable && (info->filter == PIPE_TEX_FILTER_NEAREST) &&
++                          !info->alpha_blend && (info->mask == PIPE_MASK_RGBA) &&
++                          src_res->base.nr_samples == dst_res->base.nr_samples &&
++                          info->src.box.x + info->src.box.width <= src_width &&
++                          info->dst.box.x + info->dst.box.width <= dst_width &&
++                          info->src.box.y + info->src.box.height <= src_height &&
++                          info->dst.box.y + info->dst.box.height <= dst_height &&
++                          info->src.box.width == info->dst.box.width &&
++                          info->src.box.height == info->dst.box.height &&
++                          info->src.box.depth == info->dst.box.depth;
++
++   if (allow_copy_image && vrend_state.use_gles)
++      allow_copy_image = false;
++
++   if (allow_copy_image) {
+       VREND_DEBUG(dbg_blit, ctx,  "  Use glCopyImageSubData\n");
+       vrend_copy_sub_image(src_res, dst_res, info->src.level, &info->src.box,
+                            info->dst.level, info->dst.box.x, info->dst.box.y,

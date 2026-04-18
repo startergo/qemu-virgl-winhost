@@ -1,0 +1,93 @@
+diff --git a/src/virgl_util.c b/src/virgl_util.c
+index 8184650..c477dc4 100644
+--- a/src/virgl_util.c
++++ b/src/virgl_util.c
+@@ -153,6 +153,31 @@ static enum virgl_log_level_flags virgl_log_level = VIRGL_LOG_LEVEL_ERROR;
+ #endif
+ static bool virgl_log_level_initialized = false;
+ 
++static void virgl_init_log_level(void)
++{
++   if (virgl_log_level_initialized)
++      return;
++
++   const char* log_level_env = getenv("VIRGL_LOG_LEVEL");
++   if (log_level_env != NULL && log_level_env[0] != '\0') {
++      int log_index = 0;
++      const struct log_levels_lut *lut = &log_levels_table[0];
++      while (lut->name) {
++         if (!strcmp(lut->name, log_level_env)) {
++            virgl_log_level = lut->log_level;
++            break;
++         }
++
++         lut = &log_levels_table[++log_index];
++      }
++
++      if (!lut->name)
++         fprintf(stderr, "Unknown log level %s requested\n", log_level_env);
++   }
++
++   virgl_log_level_initialized = true;
++}
++
+ static
+ void virgl_default_logger(UNUSED enum virgl_log_level_flags log_level,
+                           const char *message,
+@@ -185,30 +210,6 @@ void virgl_default_logger(UNUSED enum virgl_log_level_flags log_level,
+       }
+    }
+ 
+-   if (!virgl_log_level_initialized) {
+-      const char* log_level_env = getenv("VIRGL_LOG_LEVEL");
+-      if (log_level_env != NULL && log_level_env[0] != '\0') {
+-         int log_index = 0;
+-         const struct log_levels_lut *lut = &log_levels_table[0];
+-         while (lut->name) {
+-            if (!strcmp(lut->name, log_level_env)) {
+-               virgl_log_level = lut->log_level;
+-               break;
+-            }
+-
+-            lut = &log_levels_table[++log_index];
+-         }
+-
+-         if (!lut->name)
+-            fprintf(fp, "Unknown log level %s requested\n", log_level_env);
+-      }
+-
+-      virgl_log_level_initialized = true;
+-   }
+-
+-   if (log_level < virgl_log_level)
+-      return;
+-
+    fprintf(fp, "%s", message);
+    fflush(fp);
+ }
+@@ -241,9 +242,20 @@ void virgl_logv(enum virgl_log_level_flags log_level, const char *fmt, va_list v
+ {
+    char *str = NULL;
+ 
++   virgl_init_log_level();
++
+    if (!virgl_log_data.log_cb)
+-      return;
++      {
++         if (vasprintf(&str, fmt, va) < 0)
++            return;
++         virgl_default_logger(log_level, str, virgl_log_data.user_data);
++         free(str);
++         return;
++      }
+ 
++   if (log_level < virgl_log_level)
++      return;
++
+    if (vasprintf(&str, fmt, va) < 0)
+       return;
+ 
+    virgl_log_data.log_cb(log_level, str, virgl_log_data.user_data);
+    free(str);
+ }
+ 

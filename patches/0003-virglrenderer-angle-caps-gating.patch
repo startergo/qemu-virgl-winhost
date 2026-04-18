@@ -1,0 +1,42 @@
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 3a9607a..de7fd82 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -12166,6 +12166,8 @@ static void vrend_renderer_fill_caps_v1(int gl_ver, int gles_ver, union virgl_ca
+ {
+    int i;
+    GLint max;
++   const char *version_str = (const char *)glGetString(GL_VERSION);
++   bool is_angle_local = (version_str && strstr(version_str, "ANGLE"));
+ 
+    /*
+     * We can't fully support this feature on GLES,
+@@ -12212,7 +12214,10 @@ static void vrend_renderer_fill_caps_v1(int gl_ver, int gles_ver, union virgl_ca
+       glGetIntegerv(GL_MAX_VERTEX_UNIFORM_BLOCKS, &max);
+       /* GL_MAX_VERTEX_UNIFORM_BLOCKS is omitting the ordinary uniform block, add it
+        * also reduce by 1 as we might generate a VirglBlock helper uniform block */
+-      caps->v1.max_uniform_blocks = max + 1 - 1;
++      if (is_angle_local && max <= 12)
++         caps->v1.max_uniform_blocks = 14;
++      else
++         caps->v1.max_uniform_blocks = max + 1;
+    }
+ 
+    if (has_feature(feat_depth_clamp))
+@@ -12376,6 +12381,7 @@ static void vrend_renderer_fill_caps_v2(int gl_ver, int gles_ver,  union virgl_c
+    GLfloat range[2];
+    uint32_t video_memory;
+    const char *renderer = (const char *)glGetString(GL_RENDERER);
++   const bool angle_in_renderer = (renderer && strstr(renderer, "ANGLE"));
+ 
+    /* Count this up when you add a feature flag that is used to set a CAP in
+     * the guest that was set unconditionally before. Then check that flag and
+@@ -12383,6 +12389,8 @@ static void vrend_renderer_fill_caps_v2(int gl_ver, int gles_ver,  union virgl_c
+     * run on an old virgl host. Use it also to indicate non-cap fixes on the
+     * host that help enable features in the guest. */
+    caps->v2.host_feature_check_version = 23;
++   if (gles_ver > 0 && angle_in_renderer)
++      caps->v2.host_feature_check_version = 4;
+ 
+    /* Forward host GL_RENDERER to the guest. */
+    strncpy(caps->v2.renderer, renderer, sizeof(caps->v2.renderer) - 1);

@@ -2,6 +2,14 @@ diff --git a/ui/sdl2.c b/ui/sdl2.c
 index aaaede5..e191032 100644
 --- a/ui/sdl2.c
 +++ b/ui/sdl2.c
+@@ -32,6 +32,7 @@
+ #include "system/runstate.h"
+ #include "system/runstate-action.h"
+ #include "system/system.h"
++#include "qemu/error-report.h"
+ #include "qemu/log.h"
+ #include "qemu-main.h"
+ 
 @@ -103,6 +103,17 @@ void sdl2_window_create(struct sdl2_console *scon)
      }
  #endif
